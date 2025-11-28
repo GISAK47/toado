@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sở Quy hoạch - Kiến Trúc TPHCM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <div id="app" class="max-w-4xl mx-auto bg-white shadow-2xl rounded-xl p-6 sm:p-8">
+        <h1 class="text-3xl font-extrabold text-blue-700 mb-6 border-b pb-3">
+            Trung Tâm Thông Tin Quy Hoạch TPHCM
+        </h1>
+        <p class="text-gray-600 mb-6">
+            Còn thở là còn gỡ 
+        </p>
+
+        <div class="space-y-4 mb-8">
+            <label for="fileInput" class="block text-lg font-medium text-gray-700">1. Chọn Ảnh Tọa Độ (Chọn nhiều file hoặc DÁN)</label>
+            <input type="file" id="fileInput" accept="image/*" multiple class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 transition duration-150">
+        </div>
+
+        <button id="processButton" onclick="processMultipleImages()" class="w-full py-3 px-6 bg-green-600 text-white font-bold rounded-xl shadow-lg hover:bg-green-700 transition duration-300 transform hover:scale-[1.01] flex items-center justify-center disabled:opacity-50" disabled>
+            <span id="buttonText">🤖 Phân Tích Ảnh và Trích Xuất Tọa Độ</span>
+            <svg id="spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        </button>
+        
+        <div id="statusMessage" class="mt-4 text-center text-sm text-gray-500 hidden"></div>
+
+        <div id="resultContainer" class="mt-8 pt-4 border-t hidden">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">2. Tọa Độ Đã Làm Sạch (Sẵn sàng vẽ Nhiều Ranh)</h2>
+            <textarea id="outputCoords" rows="10" class="w-full p-4 border-2 border-dashed border-blue-300 rounded-lg bg-blue-50 text-gray-800 font-mono text-sm focus:ring-blue-500 focus:border-blue-500" readonly placeholder="Kết quả tọa độ (X Y mỗi dòng, các ranh ngăn cách bằng 2 dòng trống) sẽ hiển thị tại đây..."></textarea>
+            
+            <button id="copyButton" onclick="copyToClipboard()" class="mt-4 py-2 px-6 bg-red-500 text-white font-bold rounded-lg hover:bg-red-600 transition duration-300 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-5 h-5 mr-2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v2.25H2.25a.75.75 0 0 1-.75-.75V8.25a.75.75 0 0 1 .75-.75h2.25V5.25a.75.75 0 0 1 .75-.75h10.5c.414 0 .75.336.75.75v12a.75.75 0 0 1-.75.75zM8.25 4.5V2.25a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 .75.75v2.25"></path>
+                </svg>
+                Copy Tọa Độ vào Clipboard
+            </button>
+        </div>
+
+        <div id="errorBox" class="mt-4 p-4 text-red-700 bg-red-100 border border-red-400 rounded-lg hidden"></div>
+    </div>
+
+    <script>
+        // ====================================================================
+        
+        // Khóa API của bạn:
+        const apiKey = "AIzaSyB3TIzWE-t_JBg-ovVvB6O7t95xXKmSbgM"; 
+        // ====================================================================
+        
+        // Cấu hình API và Endpoint
+        const MODEL_NAME = "gemini-2.5-flash";
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+
+        // Elements
+        const fileInput = document.getElementById('fileInput');
+        const processButton = document.getElementById('processButton');
+        const buttonText = document.getElementById('buttonText');
+        const spinner = document.getElementById('spinner');
+        const outputCoords = document.getElementById('outputCoords');
+        const resultContainer = document.getElementById('resultContainer');
+        const errorBox = document.getElementById('errorBox');
+        const statusMessage = document.getElementById('statusMessage');
+
+        // ====================================================================
+        // TÍNH NĂNG: Dán ảnh từ Clipboard
+        // ====================================================================
+
+        document.addEventListener('paste', handlePasteImage);
+
+        function handlePasteImage(event) {
+            hideError();
+            
+            const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+            let imageFile = null;
+
+            for (const item of items) {
+                // Kiểm tra xem item có phải là hình ảnh và là File không
+                if (item.type.indexOf('image') !== -1 && item.kind === 'file') {
+                    // Cố gắng đặt tên file tự động (ví dụ: clipboard_image_timestamp.png)
+                    const now = new Date();
+                    const fileName = `Clipboard_Image_${now.getHours()}${now.getMinutes()}${now.getSeconds()}.png`;
+                    imageFile = new File([item.getAsFile()], fileName, {type: item.type});
+                    break;
+                }
+            }
+
+            if (imageFile) {
+                event.preventDefault(); 
+
+                // 1. Lấy danh sách file hiện có
+                const currentFiles = fileInput.files;
+
+                // 2. Tạo đối tượng DataTransfer mới
+                const dataTransfer = new DataTransfer();
+
+                // 3. THÊM các file cũ (nếu có)
+                if (currentFiles) {
+                    for (let i = 0; i < currentFiles.length; i++) {
+                        dataTransfer.items.add(currentFiles[i]);
+                    }
+                }
+                
+                // 4. THÊM file ảnh mới dán
+                dataTransfer.items.add(imageFile);
+
+                // 5. Cập nhật lại fileInput.files với danh sách mới
+                fileInput.files = dataTransfer.files;
+
+                // Cập nhật trạng thái button
+                processButton.disabled = false;
+                resultContainer.classList.add('hidden');
+                outputCoords.value = "";
+                
+                // Hiển thị thông báo tổng số file hiện có
+                showStatusMessage(`✅ Đã dán ảnh từ Clipboard. Tổng số file sẵn sàng xử lý: ${fileInput.files.length}`, 'green');
+            }
+        }
+
+        // Bật nút xử lý khi có file được chọn hoặc khi fileInput.files được cập nhật từ paste
+        fileInput.addEventListener('change', () => {
+            processButton.disabled = fileInput.files.length === 0;
+            resultContainer.classList.add('hidden');
+            errorBox.classList.add('hidden');
+            statusMessage.classList.add('hidden'); // Ẩn trạng thái dán khi chọn file mới
+            outputCoords.value = "";
+        });
+
+        // Hàm chính xử lý NHIỀU ảnh và gọi API
+        async function processMultipleImages() {
+            const files = Array.from(fileInput.files);
+            if (files.length === 0) {
+                displayError("Vui lòng chọn ít nhất một file ảnh hoặc dán ảnh từ clipboard.");
+                return;
+            }
+
+            setLoading(true, `Đang xử lý 1/${files.length} file...`);
+            hideError();
+            resultContainer.classList.add('hidden');
+            
+            const allOutputCoords = [];
+            let successfulCount = 0;
+
+            try {
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    const fileName = file.name || `ảnh dán ${i + 1}`; // Tên file cho ảnh dán
+
+                    setLoading(true, `Đang xử lý ${i + 1}/${files.length} file: ${fileName}`);
+                    
+                    const base64Data = await readFileAsBase64(file);
+                    
+                    // Gọi API cho từng ảnh
+                    const coordsArray = await callGeminiAPI(base64Data, file.type);
+                    
+                    if (coordsArray.length === 0) {
+                        console.warn(`[CẢNH BÁO] AI không thể trích xuất tọa độ hợp lệ từ file: ${fileName}. Bỏ qua file này.`);
+                        continue;
+                    }
+                    
+                    // Thêm kết quả vào danh sách
+                    allOutputCoords.push(formatCoordsForOutput(coordsArray));
+                    successfulCount++;
+                }
+
+                if (successfulCount === 0) {
+                    displayError("AI không thể trích xuất được tọa độ hợp lệ từ bất kỳ ảnh nào đã chọn. Vui lòng kiểm tra lại chất lượng ảnh.");
+                    return;
+                }
+                
+                // Nối tất cả các ranh giới lại, cách nhau bởi 2 dòng trống
+                const finalOutput = allOutputCoords.join('\n\n');
+                
+                displayResults(finalOutput);
+
+            } catch (error) {
+                console.error("Lỗi xử lý:", error);
+                if (error.message.includes("403")) {
+                    displayError(`Lỗi 403 FORBIDDEN: Khóa API của bạn không có quyền truy cập. Vui lòng kiểm tra lại Hạn chế Khóa API trên Google AI Studio, đảm bảo khóa đang ở chế độ "Không giới hạn" (None) khi chạy cục bộ.`);
+                } else {
+                    displayError(`Lỗi xử lý API hoặc dữ liệu: ${error.message}`);
+                }
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // Đọc file ảnh và chuyển thành Base64
+        function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64String = reader.result.split(',')[1];
+                    resolve(base64String);
+                };
+                reader.onerror = error => reject(error);
+                reader.readAsDataURL(file);
+            });
+        }
+        
+        // Gọi API Gemini
+        async function callGeminiAPI(base64Data, mimeType) {
+            const systemPrompt = "Bạn là một chuyên gia phân tích dữ liệu trắc địa. Nhiệm vụ của bạn là trích xuất chính xác tất cả các cặp tọa độ X (Kinh Tuyến) và Y (Vĩ Tuyến) từ ảnh bảng tọa độ được cung cấp. Bỏ qua cột STT và cao độ (Z/H) nếu có. Chỉ trả về một mảng JSON tuân thủ schema đã cho.";
+            
+            // Schema JSON mong muốn
+            const responseSchema = {
+                type: "ARRAY",
+                description: "Mảng chứa các đối tượng tọa độ X và Y.",
+                items: {
+                    type: "OBJECT",
+                    properties: {
+                        "x": { "type": "number", "description": "Tọa độ X (Kinh Tuyến, thường là số lớn hơn)." },
+                        "y": { "type": "number", "description": "Tọa độ Y (Vĩ Tuyến, thường là số nhỏ hơn)." }
+                    },
+                    required: ["x", "y"],
+                    "propertyOrdering": ["x", "y"]
+                }
+            };
+
+            const payload = {
+                contents: [
+                    {
+                        role: "user",
+                        parts: [
+                            { text: "Trích xuất tọa độ X và Y từ bảng này. Đảm bảo mọi giá trị thập phân đều được trả về dưới dạng số (Number) trong JSON. Chỉ trả về mảng JSON, không thêm văn bản giải thích." },
+                            {
+                                inlineData: {
+                                    mimeType: mimeType,
+                                    data: base64Data
+                                }
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: responseSchema
+                }
+            };
+            
+            let lastError = null;
+            const maxRetries = 1; 
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                let response = null; 
+                const delay = Math.pow(2, attempt) * 1000; 
+
+                if (attempt > 0) {
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+
+                try {
+                    statusMessage.classList.add('hidden');
+
+                    response = await fetch(apiUrl, { 
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        if (response.status === 403 || response.status === 429 || response.status >= 500) {
+                            lastError = new Error(`Lỗi HTTP ${response.status}: ${errorData.error?.message || 'Không rõ.'}`);
+                            continue;
+                        }
+                        throw new Error(`Lỗi HTTP ${response.status}: ${errorData.error?.message || 'Không rõ.'}`);
+                    }
+                    
+                    const result = await response.json();
+                    
+                    if (result.candidates && result.candidates.length > 0 &&
+                        result.candidates[0].content && result.candidates[0].content.parts &&
+                        result.candidates[0].content.parts.length > 0) {
+                        
+                        const jsonText = result.candidates[0].content.parts[0].text.trim();
+                        const cleanedJsonText = jsonText.replace(/```json|```/g, '').trim();
+                        
+                        return JSON.parse(cleanedJsonText);
+                    } else {
+                        throw new Error("Cấu trúc phản hồi AI không hợp lệ hoặc thiếu nội dung.");
+                    }
+                } catch (error) {
+                    lastError = error;
+                    if (response && (response.status === 403 || response.status === 429 || response.status >= 500)) { 
+                        continue; 
+                    } else {
+                        throw error; 
+                    }
+                }
+            }
+            throw lastError;
+        }
+
+        // Định dạng mảng tọa độ thành chuỗi X Y cách nhau 1 dòng
+        function formatCoordsForOutput(coordsArray) {
+            let output = "";
+            coordsArray.forEach(coord => {
+                output += `${coord.x} ${coord.y}\n`;
+            });
+            return output.trim(); // Loại bỏ dòng trống cuối cùng
+        }
+
+        // Hiển thị kết quả cuối cùng
+        function displayResults(finalOutput) {
+            outputCoords.value = finalOutput;
+            resultContainer.classList.remove('hidden');
+            statusMessage.classList.add('hidden');
+        }
+
+        // Copy nội dung vào clipboard
+        function copyToClipboard() {
+            outputCoords.select();
+            try {
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(outputCoords.value).then(() => {
+                        showSuccessMessage("Đã Copy Tọa Độ vào Clipboard!");
+                    }).catch(err => {
+                        console.error('Lỗi khi Copy:', err);
+                        showSuccessMessage("Vui lòng Copy thủ công: Chọn và Ctrl+C.");
+                    });
+                } else {
+                    const successful = document.execCommand('copy');
+                    if (successful) {
+                        showSuccessMessage("Đã Copy Tọa Độ vào Clipboard!");
+                    } else {
+                        throw new Error("Copy không thành công.");
+                    }
+                }
+            } catch (err) {
+                console.error('Không thể copy', err);
+                showSuccessMessage("Vui lòng Copy thủ công: Chọn và Ctrl+C.");
+            }
+        }
+
+        // Utility Functions
+        function setLoading(isLoading, message = "🤖 Phân Tích Ảnh và Trích Xuất Tọa Độ") {
+            processButton.disabled = isLoading || fileInput.files.length === 0;
+            spinner.classList.toggle('hidden', !isLoading);
+            buttonText.textContent = isLoading ? message : "🤖 Phân Tích Ảnh và Trích Xuất Tọa Độ";
+            if (isLoading) {
+                statusMessage.classList.add('hidden'); // Ẩn trạng thái dán khi bắt đầu xử lý
+            }
+        }
+
+        function displayError(message) {
+            errorBox.textContent = `Lỗi: ${message}`;
+            errorBox.classList.remove('hidden');
+            statusMessage.classList.add('hidden');
+        }
+
+        function hideError() {
+            errorBox.classList.add('hidden');
+        }
+
+        // Hàm hiển thị thông báo trạng thái (dành cho tính năng Dán)
+        function showStatusMessage(message, color) {
+            statusMessage.textContent = message;
+            statusMessage.className = `mt-4 text-center text-sm ${color === 'green' ? 'text-green-600 bg-green-50' : 'text-gray-500'} p-2 rounded`;
+            statusMessage.classList.remove('hidden');
+        }
+
+        function showSuccessMessage(message) {
+            const originalText = document.getElementById('copyButton').innerHTML;
+            const copyButton = document.getElementById('copyButton');
+            copyButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-5 h-5 mr-2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"></path></svg> ${message}`;
+            copyButton.classList.remove('bg-red-500', 'hover:bg-red-600');
+            copyButton.classList.add('bg-green-500', 'hover:bg-green-600');
+
+            setTimeout(() => {
+                copyButton.innerHTML = originalText;
+                copyButton.classList.add('bg-red-500', 'hover:bg-red-600');
+                copyButton.classList.remove('bg-green-500', 'hover:bg-green-600');
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
